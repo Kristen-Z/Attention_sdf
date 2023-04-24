@@ -10,10 +10,27 @@ import logging
 import math
 import json
 import time
+import wandb
 
 import deep_sdf
 import deep_sdf.workspace as ws
 
+
+# start a new wandb run to track this script
+wandb.init(
+    # set the wandb project where this run will be logged
+    project="Attention_sdf",
+    # track hyperparameters and run metadata
+    config={
+    "attention_layer_num": 3,
+    "learning_rate1": 0.0001,
+    "learning_rate2": 0.001,
+    "architecture": "cross-attention + MLP",
+    "dataset": "ShapeNet",
+    "epochs": 2000,
+    "regularization": "true",
+    }
+)
 
 class LearningRateSchedule:
     def get_learning_rate(self, epoch):
@@ -334,7 +351,7 @@ def main_function(experiment_directory, continue_from, batch_split):
     logging.info("training with {} GPU(s)".format(len(device_ids)))
 
     if torch.cuda.device_count() > 1:
-        attention_decoder = torch.nn.DataParallel(attention_decoder)
+        attention_decoder = torch.nn.DataParallel(attention_decoder,device_ids=device_ids)
 
     num_epochs = specs["NumEpochs"]
     log_frequency = get_spec_with_default(specs, "LogFrequency", 10)
@@ -452,6 +469,7 @@ def main_function(experiment_directory, continue_from, batch_split):
         )
     )
     iters_per_epoch = num_scenes//scene_per_batch
+    wandb.watch(attention_decoder)
     for epoch in range(start_epoch, num_epochs + 1):
 
         start = time.time()
@@ -463,6 +481,8 @@ def main_function(experiment_directory, continue_from, batch_split):
         adjust_learning_rate(lr_schedules, optimizer_all, epoch)
 
         epoch_loss = 0.0
+        reconstruction_loss = 0.0
+        reg_loss_latent = 0.0
 
         for sdf_data, indices in sdf_loader:
 
@@ -502,7 +522,7 @@ def main_function(experiment_directory, continue_from, batch_split):
                     pred_sdf = torch.clamp(pred_sdf, minT, maxT)
 
                 chunk_loss = loss_l1(pred_sdf, sdf_gt[i].cuda()) / num_sdf_samples
-
+                reconstruction_loss += chunk_loss.item()
                 if do_code_regularization:
                     l2_size_loss = torch.sum(torch.norm(batch_vecs, dim=1))
                     reg_loss = (
@@ -531,8 +551,9 @@ def main_function(experiment_directory, continue_from, batch_split):
         seconds_elapsed = end - start
         timing_log.append(seconds_elapsed)
 
-        logging.info("Loss:{}...reconstruction_loss:{}...".format(epoch_loss/iters_per_epoch))
+        logging.info("Loss:{}...".format(epoch_loss/iters_per_epoch))
         lr_log.append([schedule.get_learning_rate(epoch) for schedule in lr_schedules])
+        wandb.log({"total_loss": epoch_loss/ iters_per_epoch, "reconstruction_loss":reconstruction_loss/ iters_per_epoch,"reg_loss_latent":reg_loss_latent/iters_per_epoch}, step=epoch)
 
         lat_mag_log.append(get_mean_latent_vector_magnitude(lat_vecs))
 

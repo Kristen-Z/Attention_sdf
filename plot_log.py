@@ -76,7 +76,7 @@ def load_logs(experiment_directory, type):
         raise Exception('unrecognized plot type "{}"'.format(type))
 
     ax.grid()
-    plt.show()
+    plt.savefig(os.path.join(experiment_directory,type + str(logs["epoch"])+'.png'))
 
 
 if __name__ == "__main__":

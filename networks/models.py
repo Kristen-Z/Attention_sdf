@@ -53,6 +53,9 @@ class Decoder(nn.Module):
     ):
         super(Decoder, self).__init__()
 
+        def make_sequence():
+            return []
+
         dims = [latent_size] + dims + [1]
 
         self.num_layers = len(dims)
@@ -102,14 +105,14 @@ class Decoder(nn.Module):
     def forward(self, input):
 
         if input.shape[1] > 3 and self.latent_dropout:
-            x = F.dropout(input, p=0.2, training=self.training)
+            x = F.dropout(x, p=0.2, training=self.training)
         else:
             x = input
 
         for layer in range(0, self.num_layers - 1):
             lin = getattr(self, "lin" + str(layer))
             if layer in self.latent_in:
-                x = torch.cat([x, input], 1)
+                x = torch.cat([x, input], dim=-1)
             x = lin(x)
             # last layer Tanh
             if layer == self.num_layers - 2 and self.use_tanh:
@@ -122,7 +125,7 @@ class Decoder(nn.Module):
                 ):
                     bn = getattr(self, "bn" + str(layer))
                     x = bn(x)
-                x = self.relu(x)
+                x= self.relu(x)
                 if self.dropout is not None and layer in self.dropout:
                     x = F.dropout(x, p=self.dropout_prob, training=self.training)
 
@@ -143,8 +146,8 @@ class Attention_SDF(nn.Module):
         dropout_prob=0.0,
         norm_layers=(),
         latent_in=(),
-        weight_norm=False,
-        xyz_in_all=None,
+        weight_norm=True,
+        xyz_in_all=False,
         use_tanh=False,
         latent_dropout=False,
     ):
@@ -172,7 +175,8 @@ class Attention_SDF(nn.Module):
     
 # latent = torch.randn(10, 256)
 # coords = torch.randn(10, 3)
-# model = Attention_sdf(256,4,[512,512,512])
+# model = Attention_SDF(256,4,[ 512, 512, 512, 512, 512, 512, 512, 512 ],dropout=[0, 1, 2, 3, 4, 5, 6, 7],dropout_prob=0.2,norm_layers=[0, 1, 2, 3, 4, 5, 6, 7],latent_in=[4])
+# print(model)
 # res = model(latent,coords)
 # print(res.shape)
 # print(res)
