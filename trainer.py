@@ -259,7 +259,7 @@ def main_function(experiment_directory, continue_from, batch_split):
     data_source = specs["DataSource"]
     train_split_file = specs["TrainSplit"]
 
-    arch = __import__("networks." + specs["NetworkArch"], fromlist=["Decoder"])
+    arch = __import__("networks." + specs["NetworkArch"], fromlist=["Attention_SDF"])
 
     logging.debug(specs["NetworkSpecs"])
 
@@ -285,13 +285,13 @@ def main_function(experiment_directory, continue_from, batch_split):
 
     def save_latest(epoch):
 
-        save_model(experiment_directory, "latest.pth", decoder, epoch)
+        save_model(experiment_directory, "latest.pth", attention_decoder, epoch)
         save_optimizer(experiment_directory, "latest.pth", optimizer_all, epoch)
         save_latent_vectors(experiment_directory, "latest.pth", lat_vecs, epoch)
 
     def save_checkpoints(epoch):
 
-        save_model(experiment_directory, str(epoch) + ".pth", decoder, epoch)
+        save_model(experiment_directory, str(epoch) + ".pth", attention_decoder, epoch)
         save_optimizer(experiment_directory, str(epoch) + ".pth", optimizer_all, epoch)
         save_latent_vectors(experiment_directory, str(epoch) + ".pth", lat_vecs, epoch)
 
@@ -326,12 +326,15 @@ def main_function(experiment_directory, continue_from, batch_split):
 
     code_bound = get_spec_with_default(specs, "CodeBound", None)
 
-    decoder = arch.Decoder(latent_size, **specs["NetworkSpecs"]).cuda()
+    device_ids = [0,1,2,3]  # Assign GPU id
+    device = torch.device("cuda:{}".format(device_ids[0]))
+    torch.cuda.set_device(device)
+    attention_decoder = arch.Attention_SDF(latent_size, **specs["NetworkSpecs"]).to(device)
 
-    logging.info("training with {} GPU(s)".format(torch.cuda.device_count()))
+    logging.info("training with {} GPU(s)".format(len(device_ids)))
 
-    # if torch.cuda.device_count() > 1:
-    decoder = torch.nn.DataParallel(decoder)
+    if torch.cuda.device_count() > 1:
+        attention_decoder = torch.nn.DataParallel(attention_decoder)
 
     num_epochs = specs["NumEpochs"]
     log_frequency = get_spec_with_default(specs, "LogFrequency", 10)
@@ -360,7 +363,7 @@ def main_function(experiment_directory, continue_from, batch_split):
 
     logging.info("There are {} scenes".format(num_scenes))
 
-    logging.debug(decoder)
+    logging.debug(attention_decoder)
 
     lat_vecs = torch.nn.Embedding(num_scenes, latent_size, max_norm=code_bound)
     torch.nn.init.normal_(
@@ -380,7 +383,7 @@ def main_function(experiment_directory, continue_from, batch_split):
     optimizer_all = torch.optim.Adam(
         [
             {
-                "params": decoder.parameters(),
+                "params": attention_decoder.parameters(),
                 "lr": lr_schedules[0].get_learning_rate(0),
             },
             {
@@ -407,7 +410,7 @@ def main_function(experiment_directory, continue_from, batch_split):
         )
 
         model_epoch = ws.load_model_parameters(
-            experiment_directory, continue_from, decoder
+            experiment_directory, continue_from, attention_decoder
         )
 
         optimizer_epoch = load_optimizer(
@@ -438,7 +441,7 @@ def main_function(experiment_directory, continue_from, batch_split):
 
     logging.info(
         "Number of decoder parameters: {}".format(
-            sum(p.data.nelement() for p in decoder.parameters())
+            sum(p.data.nelement() for p in attention_decoder.parameters())
         )
     )
     logging.info(
@@ -448,16 +451,18 @@ def main_function(experiment_directory, continue_from, batch_split):
             lat_vecs.embedding_dim,
         )
     )
-
+    iters_per_epoch = num_scenes//scene_per_batch
     for epoch in range(start_epoch, num_epochs + 1):
 
         start = time.time()
 
         logging.info("epoch {}...".format(epoch))
 
-        decoder.train()
+        attention_decoder.train()
 
         adjust_learning_rate(lr_schedules, optimizer_all, epoch)
+
+        epoch_loss = 0.0
 
         for sdf_data, indices in sdf_loader:
 
@@ -490,10 +495,8 @@ def main_function(experiment_directory, continue_from, batch_split):
 
                 batch_vecs = lat_vecs(indices[i])
 
-                input = torch.cat([batch_vecs, xyz[i]], dim=1)
-
                 # NN optimization
-                pred_sdf = decoder(input)
+                pred_sdf = attention_decoder(batch_vecs, xyz[i])
 
                 if enforce_minmax:
                     pred_sdf = torch.clamp(pred_sdf, minT, maxT)
@@ -518,20 +521,22 @@ def main_function(experiment_directory, continue_from, batch_split):
 
             if grad_clip is not None:
 
-                torch.nn.utils.clip_grad_norm_(decoder.parameters(), grad_clip)
+                torch.nn.utils.clip_grad_norm_(attention_decoder.parameters(), grad_clip)
 
             optimizer_all.step()
+            epoch_loss += batch_loss
 
         end = time.time()
 
         seconds_elapsed = end - start
         timing_log.append(seconds_elapsed)
 
+        logging.info("Loss:{}...reconstruction_loss:{}...".format(epoch_loss/iters_per_epoch))
         lr_log.append([schedule.get_learning_rate(epoch) for schedule in lr_schedules])
 
         lat_mag_log.append(get_mean_latent_vector_magnitude(lat_vecs))
 
-        append_parameter_magnitudes(param_mag_log, decoder)
+        append_parameter_magnitudes(param_mag_log, attention_decoder)
 
         if epoch in checkpoints:
             save_checkpoints(epoch)
@@ -554,7 +559,7 @@ if __name__ == "__main__":
 
     import argparse
 
-    arg_parser = argparse.ArgumentParser(description="Train a DeepSDF autodecoder")
+    arg_parser = argparse.ArgumentParser(description="Train a Cross-attention based decoder")
     arg_parser.add_argument(
         "--experiment",
         "-e",

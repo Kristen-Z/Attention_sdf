@@ -132,7 +132,7 @@ class Decoder(nn.Module):
         return x
 
 
-class Attention_sdf(nn.Module):
+class Attention_SDF(nn.Module):
     def __init__(
         self,
         latent_size,
@@ -148,7 +148,7 @@ class Attention_sdf(nn.Module):
         use_tanh=False,
         latent_dropout=False,
     ):
-        super(Attention_sdf, self).__init__()
+        super(Attention_SDF, self).__init__()
 
         crossattention = CrossAttention(dim_q=3,dim_kv=latent_size)
         self.attn_layers = nn.ModuleList([])
