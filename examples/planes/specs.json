@@ -1,7 +1,7 @@
 {
   "Description" : "This experiment learns a shape representation for planes ",
   "DataSource" : "data",
-  "TrainSplit" : "examples/splits/sv2_planes_train.json",
+  "TrainSplit" : "examples/splits/sv2_planes_train_debug.json",
   "TestSplit" : "examples/splits/sv2_planes_test.json",
   "NetworkArch" : "models",
   "NetworkSpecs" : {
