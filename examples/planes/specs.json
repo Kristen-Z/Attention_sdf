@@ -5,8 +5,8 @@
   "TestSplit" : "examples/splits/sv2_planes_test.json",
   "NetworkArch" : "models",
   "NetworkSpecs" : {
-    "cross_atten_num" : 3,
-    "decoder_dims" : [ 512, 512, 512, 512, 512, 512, 512, 512 ],
+    "cross_atten_num" : 1,
+    "decoder_dims" : [ 512, 512, 512, 512, 512, 512, 512, 512],
     "dropout" : [0, 1, 2, 3, 4, 5, 6, 7],
     "dropout_prob" : 0.2,
     "norm_layers" : [0, 1, 2, 3, 4, 5, 6, 7],
@@ -29,12 +29,12 @@
     },
     {
       "Type" : "Step",
-      "Initial" : 0.001,
+      "Initial" : 0.0005,
       "Interval" : 500,
       "Factor" : 0.5
     }],
   "SamplesPerScene" : 16384,
-  "ScenesPerBatch" : 64,
+  "ScenesPerBatch" : 8,
   "DataLoaderThreads" : 16,
   "ClampingDistance" : 0.1,
   "CodeRegularization" : true,

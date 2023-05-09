@@ -63,13 +63,11 @@ def reconstruct(
 
         latent_inputs = latent.expand(num_samples, -1)
 
-        inputs = torch.cat([latent_inputs, xyz], 1).cuda()
-
-        pred_sdf = decoder(inputs)
+        pred_sdf = decoder(latent_inputs, xyz)
 
         # TODO: why is this needed?
         if e == 0:
-            pred_sdf = decoder(inputs)
+            pred_sdf = decoder(latent_inputs, xyz)
 
         pred_sdf = torch.clamp(pred_sdf, -clamp_dist, clamp_dist)
 
@@ -91,7 +89,7 @@ def reconstruct(
 if __name__ == "__main__":
 
     arg_parser = argparse.ArgumentParser(
-        description="Use a trained DeepSDF decoder to reconstruct a shape given SDF "
+        description="Use a trained Attention decoder to reconstruct a shape given SDF "
         + "samples."
     )
     arg_parser.add_argument(
@@ -159,13 +157,13 @@ if __name__ == "__main__":
 
     specs = json.load(open(specs_filename))
 
-    arch = __import__("networks." + specs["NetworkArch"], fromlist=["Decoder"])
+    arch = __import__("networks." + specs["NetworkArch"], fromlist=["Attention_SDF"])
 
     latent_size = specs["CodeLength"]
 
-    decoder = arch.Decoder(latent_size, **specs["NetworkSpecs"])
+    attention_decoder = arch.Attention_SDF(latent_size, **specs["NetworkSpecs"])
 
-    decoder = torch.nn.DataParallel(decoder)
+    attention_decoder = torch.nn.DataParallel(attention_decoder)
 
     saved_model_state = torch.load(
         os.path.join(
@@ -174,9 +172,9 @@ if __name__ == "__main__":
     )
     saved_model_epoch = saved_model_state["epoch"]
 
-    decoder.load_state_dict(saved_model_state["model_state_dict"])
+    attention_decoder.load_state_dict(saved_model_state["model_state_dict"])
 
-    decoder = decoder.module.cuda()
+    attention_decoder = attention_decoder.module.cuda()
 
     with open(args.split_filename, "r") as f:
         split = json.load(f)
@@ -185,7 +183,7 @@ if __name__ == "__main__":
 
     random.shuffle(npz_filenames)
 
-    logging.debug(decoder)
+    logging.debug(attention_decoder)
 
     err_sum = 0.0
     repeat = 1
@@ -251,7 +249,7 @@ if __name__ == "__main__":
 
             start = time.time()
             err, latent = reconstruct(
-                decoder,
+                attention_decoder,
                 int(args.iterations),
                 latent_size,
                 data_sdf,
@@ -268,7 +266,7 @@ if __name__ == "__main__":
 
             logging.debug("latent: {}".format(latent.detach().cpu().numpy()))
 
-            decoder.eval()
+            attention_decoder.eval()
 
             if not os.path.exists(os.path.dirname(mesh_filename)):
                 os.makedirs(os.path.dirname(mesh_filename))
@@ -277,7 +275,7 @@ if __name__ == "__main__":
                 start = time.time()
                 with torch.no_grad():
                     deep_sdf.mesh.create_mesh(
-                        decoder, latent, mesh_filename, N=256, max_batch=int(2 ** 18)
+                        attention_decoder, latent, mesh_filename, N=256, max_batch=int(2 ** 18)
                     )
                 logging.debug("total time: {}".format(time.time() - start))
 

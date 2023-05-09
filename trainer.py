@@ -11,22 +11,21 @@ import math
 import json
 import time
 import wandb
-
 import deep_sdf
 import deep_sdf.workspace as ws
-
 
 # start a new wandb run to track this script
 wandb.init(
     # set the wandb project where this run will be logged
-    project="Attention_sdf",
+    project="6-8301_final_project",
+    resume=True,
     # track hyperparameters and run metadata
     config={
-    "attention_layer_num": 3,
+    "attention_layer_num": 2,
     "learning_rate1": 0.0001,
-    "learning_rate2": 0.001,
-    "architecture": "cross-attention + MLP",
-    "dataset": "ShapeNet",
+    "learning_rate2": 0.0005,
+    "architecture": "self attn + 8-layer MLP",
+    "dataset": "ShapeNet-whole plane",
     "epochs": 2000,
     "regularization": "true",
     }
@@ -343,14 +342,14 @@ def main_function(experiment_directory, continue_from, batch_split):
 
     code_bound = get_spec_with_default(specs, "CodeBound", None)
 
-    device_ids = [0,1,2,3]  # Assign GPU id
+    device_ids = [4,5,6,7]  # Assign GPU id
     device = torch.device("cuda:{}".format(device_ids[0]))
     torch.cuda.set_device(device)
     attention_decoder = arch.Attention_SDF(latent_size, **specs["NetworkSpecs"]).to(device)
 
     logging.info("training with {} GPU(s)".format(len(device_ids)))
 
-    if torch.cuda.device_count() > 1:
+    if len(device_ids) > 1:
         attention_decoder = torch.nn.DataParallel(attention_decoder,device_ids=device_ids)
 
     num_epochs = specs["NumEpochs"]
@@ -469,6 +468,8 @@ def main_function(experiment_directory, continue_from, batch_split):
         )
     )
     iters_per_epoch = num_scenes//scene_per_batch
+    print(attention_decoder)
+    
     wandb.watch(attention_decoder)
     for epoch in range(start_epoch, num_epochs + 1):
 
@@ -523,17 +524,19 @@ def main_function(experiment_directory, continue_from, batch_split):
 
                 chunk_loss = loss_l1(pred_sdf, sdf_gt[i].cuda()) / num_sdf_samples
                 reconstruction_loss += chunk_loss.item()
+
                 if do_code_regularization:
                     l2_size_loss = torch.sum(torch.norm(batch_vecs, dim=1))
                     reg_loss = (
                         code_reg_lambda * min(1, epoch / 100) * l2_size_loss
                     ) / num_sdf_samples
-
+                    reg_loss_latent += reg_loss
                     chunk_loss = chunk_loss + reg_loss.cuda()
 
                 chunk_loss.backward()
 
                 batch_loss += chunk_loss.item()
+                epoch_loss += batch_loss
 
             logging.debug("loss = {}".format(batch_loss))
 
@@ -544,7 +547,6 @@ def main_function(experiment_directory, continue_from, batch_split):
                 torch.nn.utils.clip_grad_norm_(attention_decoder.parameters(), grad_clip)
 
             optimizer_all.step()
-            epoch_loss += batch_loss
 
         end = time.time()
 
@@ -580,7 +582,7 @@ if __name__ == "__main__":
 
     import argparse
 
-    arg_parser = argparse.ArgumentParser(description="Train a Cross-attention based decoder")
+    arg_parser = argparse.ArgumentParser(description="Train a DeepSDF autodecoder")
     arg_parser.add_argument(
         "--experiment",
         "-e",

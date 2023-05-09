@@ -83,8 +83,14 @@ def evaluate(experiment_directory, checkpoint, data_dir, split_filename):
         "w",
     ) as f:
         f.write("shape, chamfer_dist\n")
+        chamfer_dist = []
         for result in chamfer_results:
             f.write("{}, {}\n".format(result[0], result[1]))
+            chamfer_dist.append(result[1])
+        cd_mean = np.mean(chamfer_dist) * 1000
+        cd_median = np.median(chamfer_dist) * 1000
+        f.write("Chamfer Distance mean:{}, median {}\n".format(cd_mean, cd_median))
+        
 
 
 if __name__ == "__main__":
