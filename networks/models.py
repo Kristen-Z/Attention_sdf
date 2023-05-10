@@ -8,16 +8,20 @@ class CrossAttention(nn.Module):
     def __init__(self, dim_q, dim_kv, heads=8, dim_head=64, dropout=0.0):
         super().__init__()
         inner_dim = dim_head * heads
-
+        project_out = not (heads == 1 and dim_head == dim_q)
         self.scale = dim_head**-0.5
         self.heads = heads
 
         self.to_q = nn.Linear(dim_q, inner_dim, bias=False)
         self.to_kv = nn.Linear(dim_kv, inner_dim * 2, bias=False)
 
-        self.dropout = nn.Dropout(dropout)
-        self.fc = nn.Linear(inner_dim, dim_kv)
-        self.layer_norm = nn.LayerNorm(dim_kv, eps=1e-6)
+#         self.dropout = nn.Dropout(dropout)
+#         self.fc = nn.Linear(inner_dim, dim_kv)
+#         self.layer_norm = nn.LayerNorm(dim_kv, eps=1e-6)
+        self.to_out = nn.Sequential(
+            nn.Linear(inner_dim, dim_kv),
+            nn.Dropout(dropout)
+        ) if project_out else nn.Identity()
 
     def forward(self, q, kv):
         h = self.heads
@@ -29,20 +33,21 @@ class CrossAttention(nn.Module):
         sim = einsum("b i d, b j d -> b i j", q, k) * self.scale
 
         attn = sim.softmax(dim=-1)
-        attn = self.dropout(attn)
         out = einsum("b i j, b j d -> b i d", attn, v)
         out = rearrange(out, "(b h) n d -> b n (h d)", h=h)
         # add & norm
-        out = self.fc(out) 
-        out += out
+#         out = self.dropout(self.fc(out))
+#         out += out
 
-        return self.layer_norm(out)
+        return self.to_out(out)
 
 class Decoder(nn.Module):
     def __init__(
         self,
         latent_size,
         dims,
+        self_attn,
+        if_coord_query,
         dropout=None,
         dropout_prob=0.0,
         norm_layers=(),
@@ -56,8 +61,10 @@ class Decoder(nn.Module):
 
         def make_sequence():
             return []
-
-        dims = [latent_size+3] + dims + [1]
+        if self_attn:
+            dims = [latent_size+3] + dims + [1]
+        else:
+            dims = [3 if if_coord_query else latent_size] + dims + [1]
 
         self.num_layers = len(dims)
         self.norm_layers = norm_layers
@@ -238,6 +245,8 @@ class Attention_SDF(nn.Module):
         latent_size,
         cross_atten_num,
         decoder_dims,
+        self_attn,
+        if_coord_query=True,
         pre_norm=False,
         dropout=None,
         dropout_prob=0.0,
@@ -250,13 +259,22 @@ class Attention_SDF(nn.Module):
     ):
         super(Attention_SDF, self).__init__()
 
-        #crossattention = CrossAttention(dim_q=3,dim_kv=latent_size)
-        #self.attn_layers = nn.ModuleList([])
-        self.pre_norm = pre_norm
-        self.transformer = Transformer(3+latent_size,cross_atten_num)
+#         crossattention = CrossAttention(dim_q=3,dim_kv=latent_size)
+#         self.attn_layers = nn.ModuleList([])
 #         for i in range(cross_atten_num):
 #             self.attn_layers.append(crossattention)
-        self.decoder = Decoder(latent_size,decoder_dims,dropout,dropout_prob,norm_layers,latent_in,weight_norm,xyz_in_all,use_tanh,latent_dropout)
+        self.pre_norm = pre_norm
+        self.self_attn = self_attn
+        self.if_coord_query = if_coord_query
+        if not self_attn:
+            q_dim = 3 if if_coord_query else latent_size
+            kv_dim = latent_size if if_coord_query else 3
+        else:
+            kv_dim = None
+            q_dim = 3+latent_size
+        self.transformer = Transformer(q_dim,cross_atten_num,kv_dim,selfatt=self_attn)
+
+        self.decoder = Decoder(latent_size,decoder_dims,self_attn,if_coord_query,dropout,dropout_prob,norm_layers,latent_in,weight_norm,xyz_in_all,use_tanh,latent_dropout)
     
     def forward(self, latent_codes, coords):
         if self.pre_norm:
@@ -264,11 +282,16 @@ class Attention_SDF(nn.Module):
             coords = F.normalize(coords, dim=-1)
         latent_codes = rearrange(latent_codes, 'b ... d -> b (...) d')
         coords = rearrange(coords, 'b ... d -> b (...) d')
-        # try concatenation
-        concat = torch.cat([latent_codes,coords],dim=-1)
-#         for crossattn in self.attn_layers:
-#             latent_codes = crossattn(coords,latent_codes)
-        latent_codes = self.transformer(concat)
+        # self attention - input the concatenation
+        if self.self_attn:
+            concat = torch.cat([latent_codes,coords],dim=-1)
+            latent_codes = self.transformer(concat)
+        else:
+            if self.if_coord_query:
+                latent_codes = self.transformer(coords,latent_codes)
+            else:
+                latent_codes = self.transformer(latent_codes,coords)
+        
         latent_codes = latent_codes.squeeze(dim=1)
         
         sdf = self.decoder(latent_codes)

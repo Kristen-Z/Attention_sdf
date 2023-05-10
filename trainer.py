@@ -15,21 +15,21 @@ import deep_sdf
 import deep_sdf.workspace as ws
 
 # start a new wandb run to track this script
-wandb.init(
-    # set the wandb project where this run will be logged
-    project="6-8301_final_project",
-    resume=True,
-    # track hyperparameters and run metadata
-    config={
-    "attention_layer_num": 2,
-    "learning_rate1": 0.0001,
-    "learning_rate2": 0.0005,
-    "architecture": "self attn + 8-layer MLP",
-    "dataset": "ShapeNet-whole plane",
-    "epochs": 2000,
-    "regularization": "true",
-    }
-)
+# wandb.init(
+#     # set the wandb project where this run will be logged
+#     project="6-8301_final_project",
+#     resume=True,
+#     # track hyperparameters and run metadata
+#     config={
+#     "attention_layer_num": 2,
+#     "learning_rate1": 0.0001,
+#     "learning_rate2": 0.0005,
+#     "architecture": "self attn + 8-layer MLP",
+#     "dataset": "ShapeNet-whole plane",
+#     "epochs": 2000,
+#     "regularization": "true",
+#     }
+# )
 
 class LearningRateSchedule:
     def get_learning_rate(self, epoch):
@@ -470,7 +470,7 @@ def main_function(experiment_directory, continue_from, batch_split):
     iters_per_epoch = num_scenes//scene_per_batch
     print(attention_decoder)
     
-    wandb.watch(attention_decoder)
+    #wandb.watch(attention_decoder)
     for epoch in range(start_epoch, num_epochs + 1):
 
         start = time.time()
@@ -555,7 +555,7 @@ def main_function(experiment_directory, continue_from, batch_split):
 
         logging.info("Loss:{}...".format(epoch_loss/iters_per_epoch))
         lr_log.append([schedule.get_learning_rate(epoch) for schedule in lr_schedules])
-        wandb.log({"total_loss": epoch_loss/ iters_per_epoch, "reconstruction_loss":reconstruction_loss/ iters_per_epoch,"reg_loss_latent":reg_loss_latent/iters_per_epoch}, step=epoch)
+        #wandb.log({"total_loss": epoch_loss/ iters_per_epoch, "reconstruction_loss":reconstruction_loss/ iters_per_epoch,"reg_loss_latent":reg_loss_latent/iters_per_epoch}, step=epoch)
 
         lat_mag_log.append(get_mean_latent_vector_magnitude(lat_vecs))
 
