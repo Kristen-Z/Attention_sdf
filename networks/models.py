@@ -4,50 +4,13 @@ import torch.nn.functional as F
 
 from einops import rearrange
 
-class CrossAttention(nn.Module):
-    def __init__(self, dim_q, dim_kv, heads=8, dim_head=64, dropout=0.0):
-        super().__init__()
-        inner_dim = dim_head * heads
-        project_out = not (heads == 1 and dim_head == dim_q)
-        self.scale = dim_head**-0.5
-        self.heads = heads
-
-        self.to_q = nn.Linear(dim_q, inner_dim, bias=False)
-        self.to_kv = nn.Linear(dim_kv, inner_dim * 2, bias=False)
-
-#         self.dropout = nn.Dropout(dropout)
-#         self.fc = nn.Linear(inner_dim, dim_kv)
-#         self.layer_norm = nn.LayerNorm(dim_kv, eps=1e-6)
-        self.to_out = nn.Sequential(
-            nn.Linear(inner_dim, dim_kv),
-            nn.Dropout(dropout)
-        ) if project_out else nn.Identity()
-
-    def forward(self, q, kv):
-        h = self.heads
-
-        q = self.to_q(q)
-        k, v = self.to_kv(kv).chunk(2, dim=-1)
-
-        q, k, v = map(lambda t: rearrange(t, "b n (h d) -> (b h) n d", h=h), (q, k, v))
-        sim = einsum("b i d, b j d -> b i j", q, k) * self.scale
-
-        attn = sim.softmax(dim=-1)
-        out = einsum("b i j, b j d -> b i d", attn, v)
-        out = rearrange(out, "(b h) n d -> b n (h d)", h=h)
-        # add & norm
-#         out = self.dropout(self.fc(out))
-#         out += out
-
-        return self.to_out(out)
 
 class Decoder(nn.Module):
     def __init__(
         self,
-        latent_size,
+        input_dim,
+        coord_dim,
         dims,
-        self_attn,
-        if_coord_query,
         dropout=None,
         dropout_prob=0.0,
         norm_layers=(),
@@ -61,14 +24,13 @@ class Decoder(nn.Module):
 
         def make_sequence():
             return []
-        if self_attn:
-            dims = [latent_size+3] + dims + [1]
-        else:
-            dims = [3 if if_coord_query else latent_size] + dims + [1]
+        
+        dims = [input_dim] + dims + [1]
 
         self.num_layers = len(dims)
         self.norm_layers = norm_layers
         self.latent_in = latent_in
+        self.coord_dim = coord_dim
         self.latent_dropout = latent_dropout
         if self.latent_dropout:
             self.lat_dp = nn.Dropout(0.2)
@@ -111,10 +73,10 @@ class Decoder(nn.Module):
 
     # input: N x (L)
     def forward(self, input):
-        xyz = input[:, -3:]
+        xyz = input[:, -self.coord_dim:]
 
         if input.shape[1] > 3 and self.latent_dropout:
-            latent_vecs = input[:, :-3]
+            latent_vecs = input[:, :-self.coord_dim]
             latent_vecs = F.dropout(latent_vecs, p=0.2, training=self.training)
             x = torch.cat([latent_vecs, xyz], 1)
         else:
@@ -146,6 +108,60 @@ class Decoder(nn.Module):
             x = self.th(x)
 
         return x
+    
+
+# Positional encoding like nerf
+class Embedder:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.create_embedding_fn()
+        
+    def create_embedding_fn(self):
+        embed_fns = []
+        d = self.kwargs['input_dims']
+        out_dim = 0
+        if self.kwargs['include_input']:
+            embed_fns.append(lambda x : x)
+            out_dim += d
+            
+        max_freq = self.kwargs['max_freq_log2']
+        N_freqs = self.kwargs['num_freqs']
+        
+        if self.kwargs['log_sampling']:
+            freq_bands = 2.**torch.linspace(0., max_freq, steps=N_freqs)
+        else:
+            freq_bands = torch.linspace(2.**0., 2.**max_freq, steps=N_freqs)
+            
+        for freq in freq_bands:
+            for p_fn in self.kwargs['periodic_fns']:
+                embed_fns.append(lambda x, p_fn=p_fn, freq=freq : p_fn(x * freq))
+                out_dim += d
+                    
+        self.embed_fns = embed_fns
+        self.out_dim = out_dim
+        
+    def embed(self, inputs):
+        return torch.cat([fn(inputs) for fn in self.embed_fns], -1)
+
+
+def get_embedder(pos_emb_freq, if_pos_emb=True):
+    if not if_pos_emb:
+        return nn.Identity(), 3
+    
+    embed_kwargs = {
+                'include_input' : True,
+                'input_dims' : 3,
+                'max_freq_log2' : pos_emb_freq-1,
+                'num_freqs' : pos_emb_freq,
+                'log_sampling' : True,
+                'periodic_fns' : [torch.sin, torch.cos],
+    }
+    
+    embedder_obj = Embedder(**embed_kwargs)
+    embed = lambda x, eo=embedder_obj : eo.embed(x)
+    return embed, embedder_obj.out_dim
+
+
 
 class PreNorm(nn.Module):
     def __init__(self, query_dim, fn, latent_dim = None):
@@ -230,7 +246,7 @@ class Transformer(nn.Module):
             self.layers.append(nn.ModuleList([
                 PreNorm(dim, Attention(dim, kv_dim, selfatt, heads=heads, dim_head=dim_head,
                                        dropout=dropout),kv_dim),
-                PreNorm(dim, FeedForward(dim, dropout=dropout))
+                PreNorm(dim, FeedForward(dim, dropout=dropout),kv_dim)
             ]))
 
     def forward(self, x, z=None):
@@ -246,8 +262,10 @@ class Attention_SDF(nn.Module):
         cross_atten_num,
         decoder_dims,
         self_attn,
+        if_pos_emb=True,
         if_coord_query=True,
         pre_norm=False,
+        pos_emb_freq=5,
         dropout=None,
         dropout_prob=0.0,
         norm_layers=(),
@@ -259,27 +277,25 @@ class Attention_SDF(nn.Module):
     ):
         super(Attention_SDF, self).__init__()
 
-#         crossattention = CrossAttention(dim_q=3,dim_kv=latent_size)
-#         self.attn_layers = nn.ModuleList([])
-#         for i in range(cross_atten_num):
-#             self.attn_layers.append(crossattention)
         self.pre_norm = pre_norm
         self.self_attn = self_attn
         self.if_coord_query = if_coord_query
+        self.embed_fn, self.coord_dim = get_embedder(pos_emb_freq, if_pos_emb)
         if not self_attn:
-            q_dim = 3 if if_coord_query else latent_size
-            kv_dim = latent_size if if_coord_query else 3
+            q_dim = self.coord_dim if if_coord_query else latent_size
+            kv_dim = latent_size if if_coord_query else self.coord_dim
         else:
             kv_dim = None
-            q_dim = 3+latent_size
+            q_dim = self.coord_dim+latent_size
         self.transformer = Transformer(q_dim,cross_atten_num,kv_dim,selfatt=self_attn)
 
-        self.decoder = Decoder(latent_size,decoder_dims,self_attn,if_coord_query,dropout,dropout_prob,norm_layers,latent_in,weight_norm,xyz_in_all,use_tanh,latent_dropout)
+        self.decoder = Decoder(q_dim,self.coord_dim,decoder_dims,dropout,dropout_prob,norm_layers,latent_in,weight_norm,xyz_in_all,use_tanh,latent_dropout)
     
     def forward(self, latent_codes, coords):
         if self.pre_norm:
             latent_codes = F.normalize(latent_codes, dim=-1)
             coords = F.normalize(coords, dim=-1)
+        coords = self.embed_fn(coords)
         latent_codes = rearrange(latent_codes, 'b ... d -> b (...) d')
         coords = rearrange(coords, 'b ... d -> b (...) d')
         # self attention - input the concatenation
@@ -300,8 +316,9 @@ class Attention_SDF(nn.Module):
     
 # latent = torch.randn(10, 256)
 # coords = torch.randn(10, 3)
-# model = Attention_SDF(256,2,[ 512, 512, 512, 512, 512, 512, 512, 512 ],dropout=[0, 1, 2, 3, 4, 5, 6, 7],dropout_prob=0.2,norm_layers=[0, 1, 2, 3, 4, 5, 6, 7],latent_in=[4])
-# print(model)
+# model = Attention_SDF(256,2,[ 512, 512, 512, 512],True,False,dropout=[0, 1, 2, 3],dropout_prob=0.2,norm_layers=[0, 1, 2, 3],latent_in=[2])
+# scene_mlp = Scene_MLP(256,[256,256,256,256])
+# latent = scene_mlp(coords)
 # res = model(latent,coords)
 # print(res.shape)
 # print(res)
