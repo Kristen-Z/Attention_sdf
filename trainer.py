@@ -341,7 +341,7 @@ def main_function(experiment_directory, continue_from, batch_split):
     code_reg_lambda = get_spec_with_default(specs, "CodeRegularizationLambda", 1e-4)
 
     code_bound = get_spec_with_default(specs, "CodeBound", None)
-
+    torch.cuda.empty_cache()
     device_ids = [4,5,6,7]  # Assign GPU id
     device = torch.device("cuda:{}".format(device_ids[0]))
     torch.cuda.set_device(device)
@@ -491,7 +491,6 @@ def main_function(experiment_directory, continue_from, batch_split):
             sdf_data = sdf_data.reshape(-1, 4)
 
             num_sdf_samples = sdf_data.shape[0]
-
             sdf_data.requires_grad = False
 
             xyz = sdf_data[:, 0:3]

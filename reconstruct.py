@@ -160,10 +160,14 @@ if __name__ == "__main__":
     arch = __import__("networks." + specs["NetworkArch"], fromlist=["Attention_SDF"])
 
     latent_size = specs["CodeLength"]
-
-    attention_decoder = arch.Attention_SDF(latent_size, **specs["NetworkSpecs"])
-
-    attention_decoder = torch.nn.DataParallel(attention_decoder)
+    
+    device_ids = [0,1]  # Assign GPU id
+    device = torch.device("cuda:{}".format(device_ids[0]))
+    torch.cuda.set_device(device)
+    
+    attention_decoder = arch.Attention_SDF(latent_size, **specs["NetworkSpecs"]).to(device)
+    if len(device_ids) > 1:
+        attention_decoder = torch.nn.DataParallel(attention_decoder,device_ids=device_ids)
 
     saved_model_state = torch.load(
         os.path.join(
