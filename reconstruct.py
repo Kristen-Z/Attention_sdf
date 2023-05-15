@@ -161,7 +161,7 @@ if __name__ == "__main__":
 
     latent_size = specs["CodeLength"]
     
-    device_ids = [0,1]  # Assign GPU id
+    device_ids = [4,5,6,7]  # Assign GPU id
     device = torch.device("cuda:{}".format(device_ids[0]))
     torch.cuda.set_device(device)
     
@@ -178,7 +178,6 @@ if __name__ == "__main__":
 
     attention_decoder.load_state_dict(saved_model_state["model_state_dict"])
 
-    attention_decoder = attention_decoder.module.cuda()
 
     with open(args.split_filename, "r") as f:
         split = json.load(f)

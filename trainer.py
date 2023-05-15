@@ -342,7 +342,7 @@ def main_function(experiment_directory, continue_from, batch_split):
 
     code_bound = get_spec_with_default(specs, "CodeBound", None)
     torch.cuda.empty_cache()
-    device_ids = [4,5,6,7]  # Assign GPU id
+    device_ids = [0]  # Assign GPU id
     device = torch.device("cuda:{}".format(device_ids[0]))
     torch.cuda.set_device(device)
     attention_decoder = arch.Attention_SDF(latent_size, **specs["NetworkSpecs"]).to(device)
@@ -493,7 +493,7 @@ def main_function(experiment_directory, continue_from, batch_split):
             num_sdf_samples = sdf_data.shape[0]
             sdf_data.requires_grad = False
 
-            xyz = sdf_data[:, 0:3]
+            xyz = sdf_data[:, 0:3].to(device)
             sdf_gt = sdf_data[:, 3].unsqueeze(1)
 
             if enforce_minmax:
@@ -513,7 +513,7 @@ def main_function(experiment_directory, continue_from, batch_split):
 
             for i in range(batch_split):
 
-                batch_vecs = lat_vecs(indices[i])
+                batch_vecs = lat_vecs(indices[i]).cuda()
 
                 # NN optimization
                 pred_sdf = attention_decoder(batch_vecs, xyz[i])
@@ -530,7 +530,7 @@ def main_function(experiment_directory, continue_from, batch_split):
                         code_reg_lambda * min(1, epoch / 100) * l2_size_loss
                     ) / num_sdf_samples
                     reg_loss_latent += reg_loss
-                    chunk_loss = chunk_loss + reg_loss.cuda()
+                    chunk_loss = chunk_loss + reg_loss
 
                 chunk_loss.backward()
 
